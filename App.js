@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Alert,
+  Animated,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -10,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { supabase } from './supabaseClient';
 
 const PERIOD_OPTIONS = [
   'Em Jejum',
@@ -19,6 +21,12 @@ const PERIOD_OPTIONS = [
   'Depois do Jantar',
   'Outro',
 ];
+
+const MEDICAL_LIMITS = {
+  systolic: { min: 70, max: 200 },
+  diastolic: { min: 40, max: 130 },
+  glycemia: { min: 40, max: 400 },
+};
 
 const getCurrentDateTimeValue = () => {
   const now = new Date();
@@ -39,7 +47,52 @@ const formatDisplayDateTime = (value) => {
   }).format(date);
 };
 
+const parseDisplayDateTimeToISO = (displayValue) => {
+  if (!displayValue) return getCurrentDateTimeValue();
+
+  // Tenta parsear formato manual: dd/mm/aaaa hh:mm
+  const regex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s(\d{1,2}):(\d{2})$/;
+  const match = displayValue.match(regex);
+
+  if (match) {
+    const [, day, month, year, hour, minute] = match;
+    const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${minute}`;
+    const date = new Date(isoString);
+    if (!Number.isNaN(date.getTime())) {
+      return isoString;
+    }
+  }
+
+  // Se não conseguir parsear, retorna o valor como está (provavelmente ISO)
+  return displayValue || getCurrentDateTimeValue();
+};
+
 const sanitizeNumericInput = (text, maxLength) => text.replace(/\D/g, '').slice(0, maxLength);
+
+// Funções de feedback de saúde
+const getPressureStatus = (systolic, diastolic) => {
+  if (!systolic || !diastolic) return null;
+  
+  const sys = Number(systolic);
+  const dia = Number(diastolic);
+  
+  if (sys <= 100 && dia <= 80) return { status: 'Normal', color: '#22c55e', emoji: '✓' };
+  if (sys <= 130 && dia <= 85) return { status: 'Elevada', color: '#f59e0b', emoji: '⚠️' };
+  if (sys <= 140 && dia <= 90) return { status: 'Estágio 1', color: '#ef4444', emoji: '⚠️' };
+  return { status: 'Estágio 2', color: '#dc2626', emoji: '🚨' };
+};
+
+const getGlycemiaStatus = (value) => {
+  if (!value) return null;
+  
+  const num = Number(value);
+  
+  if (num < 70) return { status: 'Hipoglicemia', color: '#0ea5e9', emoji: '⚠️' };
+  if (num < 100) return { status: 'Normal (Jejum)', color: '#22c55e', emoji: '✓' };
+  if (num < 126) return { status: 'Normal (Pós-refeição)', color: '#22c55e', emoji: '✓' };
+  if (num < 200) return { status: 'Elevada', color: '#f59e0b', emoji: '⚠️' };
+  return { status: 'Hiperglicemia', color: '#dc2626', emoji: '🚨' };
+};
 
 const FieldLabel = ({ children, required = false }) => (
   <Text style={styles.label}>
@@ -48,9 +101,23 @@ const FieldLabel = ({ children, required = false }) => (
   </Text>
 );
 
-const InputField = ({ label, value, onChangeText, placeholder, keyboardType, multiline, numberOfLines, maxLength, required, style, editable = true }) => (
+const FeedbackBadge = ({ status, color, emoji }) => {
+  if (!status) return null;
+  
+  return (
+    <View style={[styles.feedbackBadge, { borderColor: color }]}>
+      <Text style={[styles.feedbackEmoji]}>{emoji}</Text>
+      <Text style={[styles.feedbackText, { color }]}>{status}</Text>
+    </View>
+  );
+};
+
+const InputField = ({ label, value, onChangeText, placeholder, keyboardType, multiline, numberOfLines, maxLength, required, style, editable = true, showCharCount = false }) => (
   <View style={styles.fieldGroup}>
-    <FieldLabel required={required}>{label}</FieldLabel>
+    <View style={styles.labelRow}>
+      <FieldLabel required={required}>{label}</FieldLabel>
+      {value && <Text style={styles.checkmark}>✓</Text>}
+    </View>
     <TextInput
       value={value}
       onChangeText={onChangeText}
@@ -60,9 +127,13 @@ const InputField = ({ label, value, onChangeText, placeholder, keyboardType, mul
       numberOfLines={numberOfLines}
       maxLength={maxLength}
       editable={editable}
-      style={[styles.input, multiline && styles.textArea, style]}
+      style={[styles.input, multiline && styles.textArea, value && styles.inputFilled, style]}
       textAlignVertical={multiline ? 'top' : 'center'}
+      placeholderTextColor="#8fa6b5"
     />
+    {showCharCount && maxLength && (
+      <Text style={styles.charCount}>{value.length}/{maxLength}</Text>
+    )}
   </View>
 );
 
@@ -74,8 +145,36 @@ export default function App() {
   const [period, setPeriod] = useState('Antes do Almoço');
   const [notes, setNotes] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const scaleAnim = useRef(new Animated.Value(1)).current;
 
-  const handleSave = () => {
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
+  const animatePress = () => {
+    Animated.sequence([
+      Animated.timing(scaleAnim, {
+        toValue: 0.95,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scaleAnim, {
+        toValue: 1,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const pressureStatus = getPressureStatus(systolic, diastolic);
+  const glycemiaStatus = getGlycemiaStatus(glycemia);
+
+  const handleSave = async () => {
     const hasPressure = systolic.trim() !== '' && diastolic.trim() !== '';
     const hasGlycemia = glycemia.trim() !== '';
 
@@ -91,20 +190,76 @@ export default function App() {
       return;
     }
 
+    // Validar ranges médicos
+    const systolicNum = Number(systolic);
+    const diastolicNum = Number(diastolic);
+    const glycemiaNum = Number(glycemia);
+
+    if (
+      systolicNum < MEDICAL_LIMITS.systolic.min ||
+      systolicNum > MEDICAL_LIMITS.systolic.max ||
+      diastolicNum < MEDICAL_LIMITS.diastolic.min ||
+      diastolicNum > MEDICAL_LIMITS.diastolic.max ||
+      glycemiaNum < MEDICAL_LIMITS.glycemia.min ||
+      glycemiaNum > MEDICAL_LIMITS.glycemia.max
+    ) {
+      const message = `Valores fora do intervalo aceitável. Pressão: ${MEDICAL_LIMITS.systolic.min}-${MEDICAL_LIMITS.systolic.max}/${MEDICAL_LIMITS.diastolic.min}-${MEDICAL_LIMITS.diastolic.max} mmHg. Glicemia: ${MEDICAL_LIMITS.glycemia.min}-${MEDICAL_LIMITS.glycemia.max} mg/dL.`;
+      setErrorMessage(message);
+      Alert.alert('Valores inválidos', message);
+      return;
+    }
+
     setErrorMessage('');
+    setIsLoading(true);
 
-    const payload = {
-      dataHora: formatDisplayDateTime(dateTime),
-      pressao: {
-        sistolica: Number(systolic),
-        diastolica: Number(diastolic),
-      },
-      glicemia: Number(glycemia),
-      periodo: period,
-      notas: notes.trim(),
-    };
+    try {
+      const isoDateTime = parseDisplayDateTimeToISO(dateTime);
 
-    Alert.alert('Registro salvo', JSON.stringify(payload, null, 2));
+      // Salvar no Supabase
+      const { data, error } = await supabase
+        .from('health_records')
+        .insert([
+          {
+            data_hora: isoDateTime,
+            sistolica: systolicNum,
+            diastolica: diastolicNum,
+            glicemia: glycemiaNum,
+            periodo: period,
+            notas: notes.trim() || null,
+          }
+        ]);
+
+      if (error) {
+        throw error;
+      }
+
+      setIsLoading(false);
+      animatePress();
+      setSuccessMessage('✓ Registro salvo com sucesso!');
+      
+      Alert.alert(
+        '📊 Registro Salvo',
+        `Pressão: ${systolicNum}/${diastolicNum} mmHg\nGlicemia: ${glycemiaNum} mg/dL\nPeríodo: ${period}`,
+        [{ text: 'OK', onPress: handleClear }]
+      );
+    } catch (error) {
+      setIsLoading(false);
+      const errorMsg = error.message || 'Erro ao salvar no servidor. Tente novamente.';
+      setErrorMessage(errorMsg);
+      Alert.alert('❌ Erro', errorMsg);
+      console.error('Erro ao salvar:', error);
+    }
+  };
+
+  const handleClear = () => {
+    setSystolic('');
+    setDiastolic('');
+    setGlycemia('');
+    setNotes('');
+    setPeriod('Antes do Almoço');
+    setDateTime(getCurrentDateTimeValue());
+    setErrorMessage('');
+    setSuccessMessage('');
   };
 
   return (
@@ -125,7 +280,7 @@ export default function App() {
           <InputField
             label="Data e Hora"
             value={formatDisplayDateTime(dateTime)}
-            onChangeText={(text) => setDateTime(text)}
+            onChangeText={(text) => setDateTime(parseDisplayDateTimeToISO(text))}
             placeholder="dd/mm/aaaa hh:mm"
             keyboardType="numbers-and-punctuation"
             editable={true}
@@ -140,7 +295,7 @@ export default function App() {
                 placeholder="120"
                 keyboardType="numeric"
                 maxLength={3}
-                style={[styles.input, styles.pressureInput]}
+                style={[styles.input, styles.pressureInput, systolic && styles.inputFilled]}
               />
               <Text style={styles.pressureSeparator}>/</Text>
               <TextInput
@@ -149,9 +304,10 @@ export default function App() {
                 placeholder="80"
                 keyboardType="numeric"
                 maxLength={3}
-                style={[styles.input, styles.pressureInput]}
+                style={[styles.input, styles.pressureInput, diastolic && styles.inputFilled]}
               />
             </View>
+            {pressureStatus && <FeedbackBadge {...pressureStatus} />}
           </View>
 
           <InputField
@@ -163,6 +319,7 @@ export default function App() {
             required
             style={styles.glycemiaInput}
           />
+          {glycemiaStatus && <FeedbackBadge {...glycemiaStatus} />}
 
           <View style={styles.fieldGroup}>
             <FieldLabel>Período / Momento</FieldLabel>
@@ -191,14 +348,26 @@ export default function App() {
             multiline
             numberOfLines={5}
             maxLength={250}
+            showCharCount={true}
             style={styles.noteInput}
           />
 
           {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave} activeOpacity={0.9}>
-            <Text style={styles.saveButtonText}>Salvar Registro</Text>
-          </TouchableOpacity>
+          {successMessage && <Text style={styles.successText}>{successMessage}</Text>}
+
+          <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+            <TouchableOpacity 
+              style={[styles.saveButton, isLoading && styles.saveButtonDisabled]} 
+              onPress={handleSave} 
+              activeOpacity={0.9}
+              disabled={isLoading}
+            >
+              <Text style={styles.saveButtonText}>
+                {isLoading ? '⏳ Salvando...' : '💾 Salvar Registro'}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -245,8 +414,47 @@ const styles = StyleSheet.create({
     color: '#1f3554',
     marginBottom: 8,
   },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  checkmark: {
+    color: '#22c55e',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   required: {
     color: '#d94d4d',
+  },
+  inputFilled: {
+    borderColor: '#56b993',
+    backgroundColor: '#f0fdf4',
+  },
+  charCount: {
+    fontSize: 12,
+    color: '#8fa6b5',
+    marginTop: 4,
+    textAlign: 'right',
+  },
+  feedbackBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fb',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 8,
+    gap: 6,
+  },
+  feedbackEmoji: {
+    fontSize: 14,
+  },
+  feedbackText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   input: {
     backgroundColor: '#f7fbff',
@@ -330,6 +538,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
+  successText: {
+    color: '#15803d',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   saveButton: {
     backgroundColor: '#2f8cff',
     borderRadius: 16,
@@ -341,6 +562,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 12,
     elevation: 5,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#93c5fd',
+    opacity: 0.7,
   },
   saveButtonText: {
     color: '#ffffff',
