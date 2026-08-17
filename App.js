@@ -22,6 +22,18 @@ const PERIOD_OPTIONS = [
   'Outro',
 ];
 
+const MEDICATION_FREQUENCY_OPTIONS = [
+  'Uma vez ao dia',
+  'Duas vezes ao dia',
+  'Três vezes ao dia',
+  'Quatro vezes ao dia',
+  'A cada 8 horas',
+  'A cada 12 horas',
+  'A cada 24 horas',
+  'Conforme necessário',
+  'Outro',
+];
+
 const MEDICAL_LIMITS = {
   systolic: { min: 70, max: 200 },
   diastolic: { min: 40, max: 130 },
@@ -112,7 +124,7 @@ const getCombinedRiskCategory = (pressureStatus, glycemiaStatus) => {
   return riskCategories[combinedLevel];
 };
 
-const getHealthTip = (pressureStatus, glycemiaStatus, period) => {
+const getHealthTip = (pressureStatus, glycemiaStatus, period, medications) => {
   const tips = [];
   
   if (pressureStatus) {
@@ -139,15 +151,21 @@ const getHealthTip = (pressureStatus, glycemiaStatus, period) => {
     tips.push('🍽️ Pós-refeição - Aguarde 2h para medição mais precisa');
   }
   
+  if (medications && medications.length > 0) {
+    tips.push(`💊 ${medications.length} medicamento(s) registrado(s) - Mantenha o tratamento em dia`);
+  }
+  
   return tips.length > 0 ? tips.slice(0, 2) : ['💡 Preencha os valores para receber dicas personalizadas'];
 };
 
-const FieldLabel = ({ children, required = false }) => (
-  <Text style={styles.label}>
-    {children}
-    {required ? <Text style={styles.required}> *</Text> : null}
-  </Text>
-);
+const FieldLabel = ({ children, required = false }) => {
+  return (
+    <Text style={styles.label}>
+      {children}
+      {required && <Text style={styles.required}> *</Text>}
+    </Text>
+  );
+};
 
 const FeedbackBadge = ({ status, color, emoji }) => {
   if (!status) return null;
@@ -160,38 +178,40 @@ const FeedbackBadge = ({ status, color, emoji }) => {
   );
 };
 
-const InputField = ({ label, value, onChangeText, placeholder, keyboardType, multiline, numberOfLines, maxLength, required, style, editable = true, showCharCount = false, onReset, statusColor, onSubmitEditing }) => (
-  <View style={styles.fieldGroup}>
-    <View style={styles.labelRow}>
-      <FieldLabel required={required}>{label}</FieldLabel>
-      <View style={styles.labelActions}>
-        {value && <Text style={styles.checkmark}>✓</Text>}
-        {onReset && value && (
-          <TouchableOpacity onPress={onReset} style={styles.resetButton}>
-            <Text style={styles.resetButtonText}>✕</Text>
-          </TouchableOpacity>
-        )}
+const InputField = ({ label, value, onChangeText, placeholder, keyboardType, multiline, numberOfLines, maxLength, required, style, editable = true, showCharCount = false, onReset, statusColor, onSubmitEditing }) => {
+  return (
+    <View style={styles.fieldGroup}>
+      <View style={styles.labelRow}>
+        <FieldLabel required={required}>{label}</FieldLabel>
+        <View style={styles.labelActions}>
+          {value ? <Text style={styles.checkmark}>✓</Text> : null}
+          {onReset && value ? (
+            <TouchableOpacity onPress={onReset} style={styles.resetButton}>
+              <Text style={styles.resetButtonText}>✕</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        keyboardType={keyboardType}
+        multiline={multiline}
+        numberOfLines={numberOfLines}
+        maxLength={maxLength}
+        editable={editable}
+        onSubmitEditing={onSubmitEditing}
+        style={[styles.input, multiline && styles.textArea, value && styles.inputFilled, statusColor && { borderColor: statusColor, backgroundColor: `${statusColor}15` }, style]}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        placeholderTextColor="#8fa6b5"
+      />
+      {showCharCount && maxLength ? (
+        <Text style={styles.charCount}>{value.length}/{maxLength}</Text>
+      ) : null}
     </View>
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder}
-      keyboardType={keyboardType}
-      multiline={multiline}
-      numberOfLines={numberOfLines}
-      maxLength={maxLength}
-      editable={editable}
-      onSubmitEditing={onSubmitEditing}
-      style={[styles.input, multiline && styles.textArea, value && styles.inputFilled, statusColor && { borderColor: statusColor, backgroundColor: `${statusColor}15` }, style]}
-      textAlignVertical={multiline ? 'top' : 'center'}
-      placeholderTextColor="#8fa6b5"
-    />
-    {showCharCount && maxLength && (
-      <Text style={styles.charCount}>{value.length}/{maxLength}</Text>
-    )}
-  </View>
-);
+  );
+};
 
 export default function App() {
   const [dateTime, setDateTime] = useState(getCurrentDateTimeValue());
@@ -202,23 +222,25 @@ export default function App() {
   const [notes, setNotes] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [successMessage, setSuccessMessage] = useState('');
   const [dailyGoal, setDailyGoal] = useState(3);
   const [sessionCount, setSessionCount] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   
+  // Estados para medicamentos  
+  const [medications, setMedications] = useState([]);
+  const [medicationName, setMedicationName] = useState('');
+  const [medicationDosage, setMedicationDosage] = useState('');
+  const [medicationFrequency, setMedicationFrequency] = useState('Uma vez ao dia');
+  const [medicationNotes, setMedicationNotes] = useState('');
+  const [showMedicationForm, setShowMedicationForm] = useState(false);
+  
   const systolicRef = useRef(null);
   const diastolicRef = useRef(null);
   const glycemiaRef = useRef(null);
   const notesRef = useRef(null);
-
-  useEffect(() => {
-    if (successMessage) {
-      const timer = setTimeout(() => setSuccessMessage(''), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [successMessage]);
+  const medicationNameRef = useRef(null);
+  const medicationDosageRef = useRef(null);
 
   const animatePress = () => {
     Animated.sequence([
@@ -238,7 +260,7 @@ export default function App() {
   const pressureStatus = getPressureStatus(systolic, diastolic);
   const glycemiaStatus = getGlycemiaStatus(glycemia);
   const combinedRisk = getCombinedRiskCategory(pressureStatus, glycemiaStatus);
-  const healthTips = getHealthTip(pressureStatus, glycemiaStatus, period);
+  const healthTips = getHealthTip(pressureStatus, glycemiaStatus, period, medications);
 
   const handleSave = async () => {
     const hasPressure = systolic.trim() !== '' && diastolic.trim() !== '';
@@ -301,14 +323,8 @@ export default function App() {
 
       setIsLoading(false);
       animatePress();
-      setSuccessMessage('✓ Registro salvo com sucesso!');
       setSessionCount(prev => prev + 1);
-      
-      Alert.alert(
-        '📊 Registro Salvo',
-        `Pressão: ${systolicNum}/${diastolicNum} mmHg\nGlicemia: ${glycemiaNum} mg/dL\nPeríodo: ${period}`,
-        [{ text: 'OK', onPress: handleClear }]
-      );
+      handleClear();
     } catch (error) {
       setIsLoading(false);
       const errorMsg = error.message || 'Erro ao salvar no servidor. Tente novamente.';
@@ -326,12 +342,55 @@ export default function App() {
     setPeriod('Antes do Almoço');
     setDateTime(getCurrentDateTimeValue());
     setErrorMessage('');
-    setSuccessMessage('');
     setShowPreview(false);
+    setMedications([]);
+    setMedicationName('');
+    setMedicationDosage('');
+    setMedicationFrequency('Uma vez ao dia');
+    setMedicationNotes('');
+    setShowMedicationForm(false);
   };
 
   const handleFieldReset = (setter) => {
     setter('');
+  };
+
+  // Funções para gerenciar medicamentos
+  const handleAddMedication = () => {
+    // Validar nome do medicamento
+    if (!medicationName.trim()) {
+      Alert.alert('Campo obrigatório', 'Por favor, informe o nome do medicamento.');
+      return;
+    }
+
+    const newMedication = {
+      id: Date.now(),
+      name: medicationName.trim(),
+      dosage: medicationDosage.trim(),
+      frequency: medicationFrequency,
+      notes: medicationNotes.trim(),
+    };
+
+    setMedications([...medications, newMedication]);
+    
+    // Limpar formulário
+    setMedicationName('');
+    setMedicationDosage('');
+    setMedicationFrequency('Uma vez ao dia');
+    setMedicationNotes('');
+    setShowMedicationForm(false);
+  };
+
+  const handleRemoveMedication = (id) => {
+    setMedications(medications.filter(med => med.id !== id));
+  };
+
+  const handleClearMedicationForm = () => {
+    setMedicationName('');
+    setMedicationDosage('');
+    setMedicationFrequency('Uma vez ao dia');
+    setMedicationNotes('');
+    setShowMedicationForm(false);
   };
 
   const togglePreview = () => {
@@ -353,7 +412,7 @@ export default function App() {
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.title}>Cadastro de Saúde</Text>
-              <Text style={styles.subtitle}>Pressão Arterial e Glicemia</Text>
+              <Text style={styles.subtitle}>Pressão Arterial, Glicemia e Medicamentos</Text>
             </View>
             <View style={styles.dailyProgress}>
               <Text style={styles.progressText}>{sessionCount}/{dailyGoal}</Text>
@@ -377,11 +436,11 @@ export default function App() {
             <View style={styles.labelRow}>
               <FieldLabel required>Pressão Arterial</FieldLabel>
               <View style={styles.labelActions}>
-                {(systolic || diastolic) && (
+                {(systolic || diastolic) ? (
                   <TouchableOpacity onPress={() => { handleFieldReset(setSystolic); handleFieldReset(setDiastolic); }} style={styles.resetButton}>
                     <Text style={styles.resetButtonText}>✕</Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
             </View>
             <View style={styles.pressureRow}>
@@ -393,7 +452,7 @@ export default function App() {
                 keyboardType="numeric"
                 maxLength={3}
                 onSubmitEditing={() => diastolicRef.current?.focus()}
-                style={[styles.input, styles.pressureInput, systolic && styles.inputFilled, pressureStatus && { borderColor: pressureStatus.color, backgroundColor: `${pressureStatus.color}15` }]}
+                style={[styles.input, styles.pressureInput, systolic ? styles.inputFilled : null, pressureStatus ? { borderColor: pressureStatus.color, backgroundColor: `${pressureStatus.color}15` } : null]}
               />
               <Text style={styles.pressureSeparator}>/</Text>
               <TextInput
@@ -404,10 +463,10 @@ export default function App() {
                 keyboardType="numeric"
                 maxLength={3}
                 onSubmitEditing={() => glycemiaRef.current?.focus()}
-                style={[styles.input, styles.pressureInput, diastolic && styles.inputFilled, pressureStatus && { borderColor: pressureStatus.color, backgroundColor: `${pressureStatus.color}15` }]}
+                style={[styles.input, styles.pressureInput, diastolic ? styles.inputFilled : null, pressureStatus ? { borderColor: pressureStatus.color, backgroundColor: `${pressureStatus.color}15` } : null]}
               />
             </View>
-            {pressureStatus && <FeedbackBadge {...pressureStatus} />}
+            {pressureStatus ? <FeedbackBadge {...pressureStatus} /> : null}
           </View>
 
           <InputField
@@ -419,10 +478,10 @@ export default function App() {
             required
             style={styles.glycemiaInput}
             onReset={() => handleFieldReset(setGlycemia)}
-            statusColor={glycemiaStatus?.color}
+            statusColor={glycemiaStatus ? glycemiaStatus.color : null}
             onSubmitEditing={() => notesRef.current?.focus()}
           />
-          {glycemiaStatus && <FeedbackBadge {...glycemiaStatus} />}
+          {glycemiaStatus ? <FeedbackBadge {...glycemiaStatus} /> : null}
 
           <View style={styles.fieldGroup}>
             <FieldLabel>Período / Momento</FieldLabel>
@@ -434,9 +493,9 @@ export default function App() {
                     key={option}
                     activeOpacity={0.8}
                     onPress={() => setPeriod(option)}
-                    style={[styles.optionButton, selected && styles.optionButtonSelected]}
+                    style={[styles.optionButton, selected ? styles.optionButtonSelected : null]}
                   >
-                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option}</Text>
+                    <Text style={[styles.optionText, selected ? styles.optionTextSelected : null]}>{option}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -456,11 +515,113 @@ export default function App() {
             onReset={() => handleFieldReset(setNotes)}
           />
 
+          {/* Seção de Medicamentos */}
+          <View style={styles.fieldGroup}>
+            <View style={styles.labelRow}>
+              <FieldLabel>💊 Medicamentos em Uso</FieldLabel>
+              <TouchableOpacity 
+                onPress={() => setShowMedicationForm(!showMedicationForm)}
+                style={styles.addMedicationButton}
+              >
+                <Text style={styles.addMedicationButtonText}>
+                  {showMedicationForm ? '−' : '+'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {showMedicationForm ? (
+              <View style={styles.medicationForm}>
+                <InputField
+                  label="Nome do Medicamento"
+                  value={medicationName}
+                  onChangeText={setMedicationName}
+                  placeholder="Ex: Metformina"
+                  required
+                  ref={medicationNameRef}
+                  onSubmitEditing={() => medicationDosageRef.current?.focus()}
+                />
+                
+                <InputField
+                  label="Dosagem"
+                  value={medicationDosage}
+                  onChangeText={setMedicationDosage}
+                  placeholder="Ex: 500mg, 1 comprimido"
+                  ref={medicationDosageRef}
+                />
+                
+                <View style={styles.fieldGroup}>
+                  <FieldLabel>Frequência</FieldLabel>
+                  <View style={styles.optionGrid}>
+                    {MEDICATION_FREQUENCY_OPTIONS.map((option) => {
+                      const selected = medicationFrequency === option;
+                      return (
+                        <TouchableOpacity
+                          key={option}
+                          activeOpacity={0.8}
+                          onPress={() => setMedicationFrequency(option)}
+                          style={[styles.optionButton, selected ? styles.optionButtonSelected : null]}
+                        >
+                          <Text style={[styles.optionText, selected ? styles.optionTextSelected : null]}>{option}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+                
+                <InputField
+                  label="Observações do Medicamento"
+                  value={medicationNotes}
+                  onChangeText={setMedicationNotes}
+                  placeholder="Ex: Tomar antes das refeições, evitar álcool..."
+                  multiline
+                  numberOfLines={3}
+                  maxLength={150}
+                  showCharCount={true}
+                />
+                
+                <View style={styles.medicationFormActions}>
+                  <TouchableOpacity 
+                    style={styles.cancelMedicationButton}
+                    onPress={handleClearMedicationForm}
+                  >
+                    <Text style={styles.cancelMedicationButtonText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.addMedicationSubmitButton}
+                    onPress={handleAddMedication}
+                  >
+                    <Text style={styles.addMedicationSubmitButtonText}>Adicionar Medicamento</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Lista de medicamentos adicionados */}
+            {medications.length > 0 ? (
+              <View style={styles.medicationsList}>
+                {medications.map((med) => (
+                  <View key={med.id} style={styles.medicationItem}>
+                    <View style={styles.medicationItemContent}>
+                      <Text style={styles.medicationItemName}>{med.name}</Text>
+                      {med.dosage ? <Text style={styles.medicationItemDetail}>Dosagem: {med.dosage}</Text> : null}
+                      <Text style={styles.medicationItemDetail}>Frequência: {med.frequency}</Text>
+                      {med.notes ? <Text style={styles.medicationItemNotes}>{med.notes}</Text> : null}
+                    </View>
+                    <TouchableOpacity 
+                      onPress={() => handleRemoveMedication(med.id)}
+                      style={styles.removeMedicationButton}
+                    >
+                      <Text style={styles.removeMedicationButtonText}>🗑️</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+
           {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-          {successMessage && <Text style={styles.successText}>{successMessage}</Text>}
-
-          {combinedRisk && (
+          {combinedRisk ? (
             <View style={[styles.riskCard, { borderColor: combinedRisk.color, backgroundColor: `${combinedRisk.color}10` }]}>
               <View style={styles.riskHeader}>
                 <Text style={styles.riskEmoji}>{combinedRisk.emoji}</Text>
@@ -468,18 +629,18 @@ export default function App() {
               </View>
               <Text style={styles.riskRecommendation}>{combinedRisk.recommendation}</Text>
             </View>
-          )}
+          ) : null}
 
-          {healthTips.length > 0 && (
+          {healthTips.length > 0 ? (
             <View style={styles.tipsContainer}>
               <Text style={styles.tipsTitle}>💡 Dicas de Saúde</Text>
               {healthTips.map((tip, index) => (
                 <Text key={index} style={styles.tipItem}>{tip}</Text>
               ))}
             </View>
-          )}
+          ) : null}
 
-          {showPreview && (systolic || diastolic || glycemia) && (
+          {showPreview && (systolic || diastolic || glycemia) ? (
             <View style={styles.previewCard}>
               <Text style={styles.previewTitle}>📋 Pré-visualização do Registro</Text>
               <View style={styles.previewContent}>
@@ -495,15 +656,29 @@ export default function App() {
                 <Text style={styles.previewLabel}>Período:</Text>
                 <Text style={styles.previewValue}>{period}</Text>
                 
-                {notes && (
+                {medications.length > 0 ? (
+                  <>
+                    <Text style={styles.previewLabel}>Medicamentos:</Text>
+                    {medications.map((med, index) => (
+                      <View key={med.id} style={styles.previewMedication}>
+                        <Text style={styles.previewValue}>{index + 1}. {med.name}</Text>
+                        {med.dosage ? <Text style={styles.previewValue}>   Dosagem: {med.dosage}</Text> : null}
+                        <Text style={styles.previewValue}>   Frequência: {med.frequency}</Text>
+                        {med.notes ? <Text style={styles.previewValue}>   Obs: {med.notes}</Text> : null}
+                      </View>
+                    ))}
+                  </>
+                ) : null}
+                
+                {notes ? (
                   <>
                     <Text style={styles.previewLabel}>Notas:</Text>
                     <Text style={styles.previewValue}>{notes}</Text>
                   </>
-                )}
+                ) : null}
               </View>
             </View>
-          )}
+          ) : null}
 
           <View style={styles.actionButtons}>
             <TouchableOpacity 
@@ -557,10 +732,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 24,
     padding: 22,
-    shadowColor: '#1c3a5d',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
+    boxShadow: '0px 8px 18px rgba(28, 58, 93, 0.08)',
     elevation: 6,
   },
   title: {
@@ -676,10 +848,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     color: '#102a43',
-    shadowColor: '#dfeaf5',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(223, 234, 245, 0.4)',
     elevation: 1,
   },
   textArea: {
@@ -749,29 +918,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
-  successText: {
-    color: '#15803d',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#86efac',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 16,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
   saveButton: {
     backgroundColor: '#2f8cff',
     borderRadius: 16,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#2f8cff',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 12,
+    boxShadow: '0px 8px 12px rgba(47, 140, 255, 0.28)',
     elevation: 5,
   },
   saveButtonDisabled: {
@@ -884,5 +1037,104 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#1f2937',
     marginBottom: 8,
+  },
+  previewMedication: {
+    marginBottom: 12,
+    paddingLeft: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: '#e5e7eb',
+  },
+  addMedicationButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#4f46e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addMedicationButtonText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  medicationForm: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  medicationFormActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  cancelMedicationButton: {
+    flex: 1,
+    backgroundColor: '#94a3b8',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelMedicationButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  addMedicationSubmitButton: {
+    flex: 2,
+    backgroundColor: '#10b981',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addMedicationSubmitButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  medicationsList: {
+    marginTop: 12,
+    gap: 8,
+  },
+  medicationItem: {
+    flexDirection: 'row',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    alignItems: 'flex-start',
+  },
+  medicationItemContent: {
+    flex: 1,
+  },
+  medicationItemName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#166534',
+    marginBottom: 4,
+  },
+  medicationItemDetail: {
+    fontSize: 13,
+    color: '#4b5563',
+    marginBottom: 2,
+  },
+  medicationItemNotes: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  removeMedicationButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#fee2e2',
+  },
+  removeMedicationButtonText: {
+    fontSize: 16,
   },
 });
